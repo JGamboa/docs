@@ -416,7 +416,6 @@ facades.Orm().Query().Model(&users).Association("Team").Replace(&userA, &userB, 
 The examples in this section use a `User` model that has many `Post` models, and a `Post` model that has many `Comment` models:
 
 ```go
-// app/models/user.go
 package models
 
 import "github.com/goravel/framework/database/orm"
@@ -459,6 +458,7 @@ import (
 
 func (r *UserController) Index(ctx http.Context) http.Response {
 	var users []models.User
+	// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 	if err := facades.Orm().Query().Model(&models.User{}).Has("Posts").Find(&users); err != nil {
 		return ctx.Response().Status(http.StatusInternalServerError).String(err.Error())
 	}
@@ -472,19 +472,21 @@ Pass an operator and a count to compare the number of related records. The opera
 ```go
 // Users with three or more posts.
 err := facades.Orm().Query().Model(&models.User{}).Has("Posts", ">=", 3).Find(&users)
+// SELECT * FROM `users` WHERE (SELECT COUNT(*) FROM `posts` WHERE `posts`.`user_id` = `users`.`id`) >= 3
 ```
 
 A nested relation is written with a dot. This query retrieves the users that have at least one post with at least one comment:
 
 ```go
 err := facades.Orm().Query().Model(&models.User{}).Has("Posts.Comments").Find(&users)
+// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE EXISTS (SELECT 1 FROM `comments` WHERE `comments`.`post_id` = `posts`.`id`) AND `posts`.`user_id` = `users`.`id`)
 ```
 
 The query builds an `EXISTS` subquery from the relationship, or a `COUNT(*)` subquery when you pass an operator and a count, so it works for has one, has many, belongs to, many to many and polymorphic relationships without extra configuration.
 
 ### Adding Conditions To The Related Records
 
-You may use the `WhereHas` method to add conditions to the related records. The callback receives a query on the related model, of the `orm.Query` type from `github.com/goravel/framework/contracts/database/orm`:
+You may use the `WhereHas` method to add conditions to the related records. The callback receives an `orm.Query` from `github.com/goravel/framework/contracts/database/orm`, a query on the related model:
 
 ```go
 import "github.com/goravel/framework/contracts/database/orm"
@@ -493,6 +495,7 @@ import "github.com/goravel/framework/contracts/database/orm"
 err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }).Find(&users)
+// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`)
 ```
 
 `WhereHas` takes the same operator and count as `Has`, after the callback:
@@ -502,6 +505,7 @@ err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query 
 err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }, ">=", 2).Find(&users)
+// SELECT * FROM `users` WHERE (SELECT COUNT(*) FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`) >= 2
 ```
 
 The global scopes of the related model and its soft deletes apply to the related records.
@@ -513,14 +517,21 @@ You may use the `DoesntHave` and `WhereDoesntHave` methods to retrieve the model
 ```go
 // Users without posts.
 err := facades.Orm().Query().Model(&models.User{}).DoesntHave("Posts").Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 
 // Users without published posts.
 err = facades.Orm().Query().Model(&models.User{}).WhereDoesntHave("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }).Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`)
 ```
 
-As in Laravel, `DoesntHave("Posts.Comments")` retrieves the users that don't have a post with comments.
+As in Laravel, `DoesntHave("Posts.Comments")` retrieves the users that don't have a post with comments:
+
+```go
+err := facades.Orm().Query().Model(&models.User{}).DoesntHave("Posts.Comments").Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE EXISTS (SELECT 1 FROM `comments` WHERE `comments`.`post_id` = `posts`.`id`) AND `posts`.`user_id` = `users`.`id`)
+```
 
 ### Combining The Conditions With Or
 
@@ -529,6 +540,7 @@ As in Laravel, `DoesntHave("Posts.Comments")` retrieves the users that don't hav
 ```go
 // Users named Goravel, or with at least one post.
 err := facades.Orm().Query().Model(&models.User{}).Where("name", "Goravel").OrHas("Posts").Find(&users)
+// SELECT * FROM `users` WHERE `name` = 'Goravel' OR EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 ```
 
 ::: warning The query needs a model

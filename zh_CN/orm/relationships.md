@@ -416,7 +416,6 @@ facades.Orm().Query().Model(&users).Association("Team").Replace(&userA, &userB, 
 本节的示例使用一个拥有多个 `Post` 模型的 `User` 模型，以及一个拥有多个 `Comment` 模型的 `Post` 模型：
 
 ```go
-// app/models/user.go
 package models
 
 import "github.com/goravel/framework/database/orm"
@@ -459,6 +458,7 @@ import (
 
 func (r *UserController) Index(ctx http.Context) http.Response {
 	var users []models.User
+	// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 	if err := facades.Orm().Query().Model(&models.User{}).Has("Posts").Find(&users); err != nil {
 		return ctx.Response().Status(http.StatusInternalServerError).String(err.Error())
 	}
@@ -472,19 +472,21 @@ func (r *UserController) Index(ctx http.Context) http.Response {
 ```go
 // 拥有三篇或以上文章的用户。
 err := facades.Orm().Query().Model(&models.User{}).Has("Posts", ">=", 3).Find(&users)
+// SELECT * FROM `users` WHERE (SELECT COUNT(*) FROM `posts` WHERE `posts`.`user_id` = `users`.`id`) >= 3
 ```
 
 嵌套关联使用点号表示。下面的查询获取至少有一篇带评论的文章的用户：
 
 ```go
 err := facades.Orm().Query().Model(&models.User{}).Has("Posts.Comments").Find(&users)
+// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE EXISTS (SELECT 1 FROM `comments` WHERE `comments`.`post_id` = `posts`.`id`) AND `posts`.`user_id` = `users`.`id`)
 ```
 
 查询会根据关联生成 `EXISTS` 子查询，传入运算符和数量时则生成 `COUNT(*)` 子查询，因此一对一、一对多、属于、多对多和多态关联都无需额外配置即可使用。
 
 ### 为关联记录添加条件
 
-你可以使用 `WhereHas` 方法为关联记录添加条件。回调接收一个关联模型的查询，类型为 `github.com/goravel/framework/contracts/database/orm` 中的 `orm.Query`：
+你可以使用 `WhereHas` 方法为关联记录添加条件。回调接收一个 `github.com/goravel/framework/contracts/database/orm` 中的 `orm.Query`，即关联模型的查询：
 
 ```go
 import "github.com/goravel/framework/contracts/database/orm"
@@ -493,6 +495,7 @@ import "github.com/goravel/framework/contracts/database/orm"
 err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }).Find(&users)
+// SELECT * FROM `users` WHERE EXISTS (SELECT 1 FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`)
 ```
 
 `WhereHas` 在回调之后接收与 `Has` 相同的运算符和数量：
@@ -502,6 +505,7 @@ err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query 
 err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }, ">=", 2).Find(&users)
+// SELECT * FROM `users` WHERE (SELECT COUNT(*) FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`) >= 2
 ```
 
 关联模型的全局作用域和软删除会作用于关联记录。
@@ -513,14 +517,21 @@ err := facades.Orm().Query().Model(&models.User{}).WhereHas("Posts", func(query 
 ```go
 // 没有文章的用户。
 err := facades.Orm().Query().Model(&models.User{}).DoesntHave("Posts").Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 
 // 没有已发布文章的用户。
 err = facades.Orm().Query().Model(&models.User{}).WhereDoesntHave("Posts", func(query orm.Query) orm.Query {
 	return query.Where("published", true)
 }).Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE `published` = true AND `posts`.`user_id` = `users`.`id`)
 ```
 
-与 Laravel 一样，`DoesntHave("Posts.Comments")` 获取没有带评论的文章的用户。
+与 Laravel 一样，`DoesntHave("Posts.Comments")` 获取没有带评论的文章的用户：
+
+```go
+err := facades.Orm().Query().Model(&models.User{}).DoesntHave("Posts.Comments").Find(&users)
+// SELECT * FROM `users` WHERE NOT EXISTS (SELECT 1 FROM `posts` WHERE EXISTS (SELECT 1 FROM `comments` WHERE `comments`.`post_id` = `posts`.`id`) AND `posts`.`user_id` = `users`.`id`)
+```
 
 ### 使用 Or 组合条件
 
@@ -529,6 +540,7 @@ err = facades.Orm().Query().Model(&models.User{}).WhereDoesntHave("Posts", func(
 ```go
 // 名为 Goravel 的用户，或者至少有一篇文章的用户。
 err := facades.Orm().Query().Model(&models.User{}).Where("name", "Goravel").OrHas("Posts").Find(&users)
+// SELECT * FROM `users` WHERE `name` = 'Goravel' OR EXISTS (SELECT 1 FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)
 ```
 
 ::: warning 查询需要模型
